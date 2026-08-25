@@ -3,6 +3,8 @@ __pycache__
 
 data/3d/
 
+input/
+
 *.egg-info
 
 CMakeFiles/
@@ -15,3 +17,5 @@ exp/result
 
 build/
 *.so
+
+.venv
