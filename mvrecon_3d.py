@@ -2081,6 +2081,7 @@ if __name__ == "__main__":
 
     gt_diffuse_map = diffuse.cpu()
     gt_depth_map = depth.cpu() if depth is not None else None
+    print("--------------- NO DEPTH---------------")
     del diffuse, depth      # save memory on GPU
     th.cuda.memory.empty_cache()
     
