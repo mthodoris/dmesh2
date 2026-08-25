@@ -4,6 +4,7 @@ six==1.16.0
 tensorboard==2.16.2
 tensorboard-data-server==0.7.2
 trimesh==4.2.0
+yaml
 ninja
 imageio
 imageio-ffmpeg
