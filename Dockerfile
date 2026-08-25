@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir torch==2.7.1 torchvision torchaudio \
 
 RUN echo "$VIRTUAL_ENV/lib/python3.10/site-packages/torch/lib" > /etc/ld.so.conf.d/torch.conf && ldconfig
 
+ARG CACHEBUST=1
 RUN git clone -b dev https://github.com/mthodoris/dmesh2.git
 
 WORKDIR /app/dmesh2
