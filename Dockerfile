@@ -36,7 +36,7 @@ RUN pip install --no-cache-dir torch==2.7.1 torchvision torchaudio \
 
 RUN echo "$VIRTUAL_ENV/lib/python3.10/site-packages/torch/lib" > /etc/ld.so.conf.d/torch.conf && ldconfig
 
-RUN git clone https://github.com/mthodoris/dmesh2.git
+RUN git clone -b dev https://github.com/mthodoris/dmesh2.git
 
 WORKDIR /app/dmesh2
 
@@ -74,7 +74,7 @@ RUN python -c "import torch; print(torch.__version__, torch.version.cuda); print
 RUN python -c "import mindiffdt._C; print('mindiffdt._C ok')"
 RUN python -c "import nvdiffrast.torch; print('nvdiffrast ok')"
 
-ENTRYPOINT ["bash", "-c", "git pull && exec \"$@\"", "--"]
+ENTRYPOINT ["bash", "-c", "git pull origin dev && exec \"$@\"", "--"]
 WORKDIR /app/dmesh2
 
 CMD ["/bin/bash"]
