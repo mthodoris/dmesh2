@@ -1,0 +1,24 @@
+log_dir: exp/result/d3/pcrecon
+device: 'cuda:0'
+
+args:
+  init_args:
+    grid_size: 0.05    # cell size of the tetrahedral grid used to seed candidate mesh vertices
+
+  lr:
+    pos: 1e-3
+    real: 3e-1
+
+  init_preal:
+    lr_schedule: constant # linear, constant, exp
+
+    num_steps: 200
+    vis_steps: 200
+
+    real_reg_weight: 1e-4
+
+  optimize_ppos:
+    lr_schedule: constant # linear, constant, exp
+
+    num_steps: 1000
+    vis_steps: 1000

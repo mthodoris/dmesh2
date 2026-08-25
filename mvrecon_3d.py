@@ -167,12 +167,18 @@ class MVRecon():
     '''
 
     def init_grid(self):
+        pointcloud_path = self.init_args.get("pointcloud_path", None)
+        if pointcloud_path is not None:
+            points = load_pointcloud(pointcloud_path).to(DEVICE)
+            self.init_from_pointcloud(points)
+            return
+
         grid_size = self.init_args.get("grid_size", 1e-2)
 
         tgrid = TetGrid(DEVICE)
         tgrid.init(
-            (-DOMAIN, -DOMAIN, -DOMAIN), 
-            (DOMAIN, DOMAIN, DOMAIN), 
+            (-DOMAIN, -DOMAIN, -DOMAIN),
+            (DOMAIN, DOMAIN, DOMAIN),
             grid_size
         )
         num_verts = tgrid.verts.shape[0]
@@ -184,6 +190,38 @@ class MVRecon():
         self.preal = th.full((self.ppos.shape[0],), 0.5, dtype=th.float32, device=DEVICE)
         self.dtfaces = self.tgrid.tri_idx.clone()
         self.pcolor = th.ones((self.ppos.shape[0], 3), dtype=th.float32, device=DEVICE)
+
+    def init_from_pointcloud(self, points: th.Tensor):
+        '''
+        Initialize [ppos]/[dtfaces] from a user-supplied point cloud instead of
+        the dense uniform tet grid. Candidate faces come from the point cloud's
+        own Delaunay tetrahedralization, and [apex_circumball_dist] (normally a
+        closed-form constant of the regular grid lattice) is replaced by the
+        median nearest-neighbor spacing of the point cloud, since that's the only
+        [self.tgrid.*] attribute referenced outside init_grid() (see optimize_ppos).
+        '''
+        self.ppos = points.to(device=DEVICE, dtype=th.float32)
+        self.preal = th.full((self.ppos.shape[0],), 0.5, dtype=th.float32, device=DEVICE)
+        self.pcolor = th.ones((self.ppos.shape[0], 3), dtype=th.float32, device=DEVICE)
+
+        dt_result = CGALDTStruct.forward(self.ppos)
+        tets = dt_result.dsimp_point_id.to(dtype=th.long)
+        dt_face_combs = [0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3]
+        dt_faces = tets[:, dt_face_combs].reshape(-1, 3)
+        dt_faces = th.sort(dt_faces, dim=-1)[0]
+        self.dtfaces = th.unique(dt_faces, dim=0)
+
+        with th.no_grad():
+            sample_size = min(5000, self.ppos.shape[0])
+            sample_idx = th.randperm(self.ppos.shape[0], device=DEVICE)[:sample_size]
+            sample = self.ppos[sample_idx]
+            dmat = th.cdist(sample, sample)
+            dmat.fill_diagonal_(float('inf'))
+            median_nn_dist = dmat.min(dim=-1)[0].median().item()
+
+        self.tgrid = edict({"apex_circumball_dist": median_nn_dist})
+
+        self.logger.info(f"Initialized from point cloud: {self.ppos.shape[0]} points, {self.dtfaces.shape[0]} candidate faces.")
         
     def prepare_target_images(self, target_image_size: int, target_patch_size: int):
         '''
@@ -196,9 +234,11 @@ class MVRecon():
         gt_image_size = self.image_size
         assert gt_image_size % target_image_size == 0, "Please adjust target_image_size to divide gt_image_size."
 
+        has_depth = self.gt_depth_map is not None
+
         gt_diffuse = self.gt_diffuse_map.permute(0, 3, 1, 2)        # [B, C, H, W]
-        gt_depth = self.gt_depth_map.permute(0, 3, 1, 2)            # [B, C, H, W]
-        
+        gt_depth = self.gt_depth_map.permute(0, 3, 1, 2) if has_depth else None            # [B, C, H, W]
+
         if gt_image_size != target_image_size:
             tgt_diffuse = th.nn.functional.interpolate(
                 gt_diffuse,
@@ -211,14 +251,14 @@ class MVRecon():
                 size=(target_image_size, target_image_size),
                 mode='bilinear',
                 align_corners=False
-            )
+            ) if has_depth else None
         else:
             tgt_diffuse = gt_diffuse
             tgt_depth = gt_depth
 
         tgt_diffuse = tgt_diffuse.permute(0, 2, 3, 1)        # [B, H, W, C]
-        tgt_depth = tgt_depth.permute(0, 2, 3, 1)            # [B, H, W, C]
-        
+        tgt_depth = tgt_depth.permute(0, 2, 3, 1) if has_depth else None            # [B, H, W, C]
+
         '''
         2. Extract patches of size [target_patch_size x target_patch_size] from downsampled images.
         Then, return the images and the patch information.
@@ -242,10 +282,19 @@ class MVRecon():
             patch_y_min = image_patches[i, 2] * patch_size_original
             patch_x_max = th.clamp(patch_x_min + patch_size_original, max=gt_image_size)
             patch_y_max = th.clamp(patch_y_min + patch_size_original, max=gt_image_size)
-            patch_depth = gt_depth[
-                image_id, patch_y_min:patch_y_max, patch_x_min:patch_x_max
-            ]
-            image_patches_have_object.append(th.any(patch_depth > 0.0))
+
+            if has_depth:
+                patch_occupancy = gt_depth[
+                    image_id, patch_y_min:patch_y_max, patch_x_min:patch_x_max
+                ]
+                image_patches_have_object.append(th.any(patch_occupancy > 0.0))
+            else:
+                # no depth GT: fall back to diffuse brightness as an object/background proxy
+                # (renderer background is pure black, see [compute_rendering_loss]'s [bg]).
+                patch_occupancy = gt_diffuse.permute(0, 2, 3, 1)[
+                    image_id, patch_y_min:patch_y_max, patch_x_min:patch_x_max
+                ]
+                image_patches_have_object.append(th.any(patch_occupancy > 1e-3))
         image_patches = image_patches[image_patches_have_object]
 
         return tgt_diffuse, tgt_depth, image_patches
@@ -561,10 +610,12 @@ class MVRecon():
         
         image_idx = image_patches[:, 0]
 
+        has_depth = tgt_depth is not None
+
         if patch_size == image_size:
 
             b_target_diffuse_tile = tgt_diffuse[image_idx]
-            b_target_depth_tile = tgt_depth[image_idx]
+            b_target_depth_tile = tgt_depth[image_idx] if has_depth else None
 
         else:
 
@@ -574,10 +625,10 @@ class MVRecon():
             patch_y_indices = patch_y_indices.unsqueeze(1)
 
             b_target_diffuse_tile = tgt_diffuse[image_idx.unsqueeze(-1).unsqueeze(-1), patch_x_indices, patch_y_indices]
-            b_target_depth_tile = tgt_depth[image_idx.unsqueeze(-1).unsqueeze(-1), patch_x_indices, patch_y_indices]
+            b_target_depth_tile = tgt_depth[image_idx.unsqueeze(-1).unsqueeze(-1), patch_x_indices, patch_y_indices] if has_depth else None
 
         b_target_diffuse_tile = b_target_diffuse_tile.to(device=DEVICE)
-        b_target_depth_tile = b_target_depth_tile.to(device=DEVICE)
+        b_target_depth_tile = b_target_depth_tile.to(device=DEVICE) if has_depth else None
 
         return b_target_diffuse_tile, b_target_depth_tile, patch_min
 
@@ -654,13 +705,14 @@ class MVRecon():
             raise ValueError("Error in rendering.")
 
         depth = depth.unsqueeze(-1)
-        
-        ### compare to gt
+
+        ### compare to gt (depth term only if depth GT is available)
         diffuse_loss = self._image_loss(diffuse, b_target_diffuse_tile)
-        depth_loss = self._image_loss(depth, b_target_depth_tile)
+        has_depth = b_target_depth_tile is not None
+        depth_loss = self._image_loss(depth, b_target_depth_tile) if has_depth else th.zeros_like(diffuse_loss)
 
         loss = diffuse_loss + depth_loss
-        
+
         with th.no_grad():
             log = {
                 "diffuse_loss": diffuse_loss.item(),
@@ -671,7 +723,8 @@ class MVRecon():
             log["depth_image"] = depth[0]
 
             log["gt_diffuse_image"] = b_target_diffuse_tile[0]
-            log["gt_depth_image"] = b_target_depth_tile[0]
+            if has_depth:
+                log["gt_depth_image"] = b_target_depth_tile[0]
 
         return loss, log
 
@@ -1912,7 +1965,7 @@ def load_input_multi_view_images(input_path):
     try:
         mv_path = os.path.join(input_path, "mv.npy")
         proj_path = os.path.join(input_path, "proj.npy")
-        
+
         mv = th.from_numpy(np.load(mv_path)).to(DEVICE)
         proj = th.from_numpy(np.load(proj_path)).to(DEVICE)
 
@@ -1920,23 +1973,40 @@ def load_input_multi_view_images(input_path):
 
         diffuse = []
         depth = []
+        have_depth = os.path.exists(os.path.join(input_path, "depth_0.png"))
         for i in range(num_images):
             diffuse_path = os.path.join(input_path, "diffuse_{}.png".format(i))
-            depth_path = os.path.join(input_path, "depth_{}.png".format(i))
-            
             diffuse_i = np.array(Image.open(diffuse_path), dtype=np.float32) / 255.0
-            depth_i = np.array(Image.open(depth_path), dtype=np.float32) / 255.0
-
             diffuse.append(th.from_numpy(diffuse_i).to(DEVICE))
-            depth.append(th.from_numpy(depth_i).to(DEVICE))
-        
+
+            if have_depth:
+                depth_path = os.path.join(input_path, "depth_{}.png".format(i))
+                depth_i = np.array(Image.open(depth_path), dtype=np.float32) / 255.0
+                depth.append(th.from_numpy(depth_i).to(DEVICE))
+
         diffuse = th.stack(diffuse, dim=0)
-        depth = th.stack(depth, dim=0)
-        
+        depth = th.stack(depth, dim=0) if have_depth else None
+
     except:
         raise ValueError("Input multi-view images not found.")
-    
+
     return mv, proj, diffuse, depth
+
+
+def load_pointcloud(path):
+    '''
+    Load a user-supplied point cloud as an initial [ppos] for reconstruction,
+    in place of the dense uniform tet grid init.
+    '''
+    if path.endswith(".npy"):
+        points = np.load(path)
+    elif path.endswith((".ply", ".obj", ".xyz", ".pcd")):
+        loaded = trimesh.load(path, process=False)
+        points = np.array(loaded.vertices) if hasattr(loaded, "vertices") else np.array(loaded)
+    else:
+        raise ValueError(f"Unsupported point cloud file type: {path}")
+
+    return th.tensor(points[:, :3], dtype=th.float32)
 
 if __name__ == "__main__":
 
@@ -1945,6 +2015,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--input-path", type=str, default="input/3d/mvrecon/toad")
     parser.add_argument("--no-log-time", action='store_true')
+    parser.add_argument("--pointcloud-path", type=str, default=None)
     args = parser.parse_args()
 
     # load settings from yaml file;
@@ -1993,6 +2064,8 @@ if __name__ == "__main__":
 
     # tetrahedral grid initialization;
     init_args = settings['args']['init_args']
+    if args.pointcloud_path is not None:
+        init_args['pointcloud_path'] = args.pointcloud_path
 
     # init preal;
     init_preal_args = edict(settings['args']['init_preal'])
@@ -2007,7 +2080,7 @@ if __name__ == "__main__":
     epoch_args = settings['args']['epoch_args']
 
     gt_diffuse_map = diffuse.cpu()
-    gt_depth_map = depth.cpu()
+    gt_depth_map = depth.cpu() if depth is not None else None
     del diffuse, depth      # save memory on GPU
     th.cuda.memory.empty_cache()
     
