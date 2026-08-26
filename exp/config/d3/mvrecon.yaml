@@ -5,6 +5,11 @@ args:
   remove_nonmanifold: false
   optimize_color: true
 
+  # max number of query faces processed at once in MB3_V0.forward (bounds peak GPU memory);
+  # lower this if you hit CUDA OOM during "Adding query faces" / optimize_ppos, especially
+  # on depth-free runs where the mesh tends to keep more points/faces "real" across epochs.
+  minball_chunk_size: 500000
+
   # args for init;
   init_args:
     grid_size: 0.05           # cell size of tetrahedral grid for point-wise real value initialization

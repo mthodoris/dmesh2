@@ -43,7 +43,39 @@ USE_NN_CACHE = True
 NN_CACHE_DEBUG = False
 
 ### number of maximum faces that we want to keep
-TRI_SUBDIV_MAX_NUM = int(1e6)  
+TRI_SUBDIV_MAX_NUM = int(1e6)
+
+### max number of query faces processed at once in MB3_V0.forward (limits peak GPU memory)
+MINBALL_CHUNK_SIZE = int(5e5)
+
+def minball_forward_chunked(p1: th.Tensor, p2: th.Tensor, p3: th.Tensor, chunk_size: int = None):
+    '''
+    Chunked wrapper around [MB3_V0.forward]. Each face's circumball is independent of the
+    others, so we can process [p1]/[p2]/[p3] in fixed-size chunks and concatenate the results,
+    bounding peak memory by [chunk_size] instead of the total number of faces.
+    '''
+    if chunk_size is None:
+        chunk_size = MINBALL_CHUNK_SIZE   # read at call time, so config-driven overrides apply
+
+    n = p1.shape[0]
+    if n <= chunk_size:
+        return MB3_V0.forward(p1, p2, p3)
+
+    centers = []
+    radii = []
+    stable_masks = []
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        chunk_ball, chunk_stable_mask = MB3_V0.forward(p1[start:end], p2[start:end], p3[start:end])
+        centers.append(chunk_ball.center)
+        radii.append(chunk_ball.radius)
+        stable_masks.append(chunk_stable_mask)
+
+    center = th.cat(centers, dim=0)
+    radius = th.cat(radii, dim=0)
+    stable_mask = th.cat(stable_masks, dim=0)
+
+    return Ball(center, radius), stable_mask
 
 class MVRecon():
 
@@ -1026,7 +1058,7 @@ class MVRecon():
                         if step % 50 == 0:
                             self.writer.add_image(f"{label}_image/{k}", v, step, dataformats='HWC')
                 
-                bar.set_description("loss: {:.4f}".format(loss))
+                bar.set_description("loss: {:.4f}".format(loss), refresh=False)
                 if step % 100 == 0 or step == num_steps - 1:
                     self.logger.info(f"[{label}] step {step}/{num_steps} loss={loss.item():.4f}")
 
@@ -1236,7 +1268,7 @@ class MVRecon():
             start_event.record()
             if step % NN_CACHE_STEP == 0 or added_new_query_faces:
                 with th.no_grad():
-                    qfaces_minball, stable_mask = MB3_V0.forward(ppos[qfaces[:, 0]], ppos[qfaces[:, 1]], ppos[qfaces[:, 2]])
+                    qfaces_minball, stable_mask = minball_forward_chunked(ppos[qfaces[:, 0]], ppos[qfaces[:, 1]], ppos[qfaces[:, 2]])
                     qfaces_minball_center = qfaces_minball.center
                     qfaces_minball_radius = qfaces_minball.radius
 
@@ -1317,7 +1349,7 @@ class MVRecon():
 
             num_likely_qfaces = likely_qfaces.shape[0]
 
-            likely_qfaces_minball, stable_mask = MB3_V0.forward(ppos[likely_qfaces[:, 0]], ppos[likely_qfaces[:, 1]], ppos[likely_qfaces[:, 2]])
+            likely_qfaces_minball, stable_mask = minball_forward_chunked(ppos[likely_qfaces[:, 0]], ppos[likely_qfaces[:, 1]], ppos[likely_qfaces[:, 2]])
 
             stable_qfaces = likely_qfaces[stable_mask]
             stable_qfaces_minball_center = likely_qfaces_minball.center[stable_mask]
@@ -1500,7 +1532,7 @@ class MVRecon():
                         if step % 50 == 0:
                             self.writer.add_image(f"{label}_image/{k}", v, step, dataformats='HWC')
                 
-                bar.set_description("loss: {:.4f}".format(loss))
+                bar.set_description("loss: {:.4f}".format(loss), refresh=False)
                 if step % 100 == 0 or step == num_steps - 1:
                     self.logger.info(f"[{label}] step {step}/{num_steps} loss={loss.item():.4f}")
 
@@ -1538,7 +1570,7 @@ class MVRecon():
             qfaces = faces[faces_is_real]
 
             ### min-ball constraint
-            qfaces_minball, _ = MB3_V0.forward(ppos[qfaces[:, 0]], ppos[qfaces[:, 1]], ppos[qfaces[:, 2]])
+            qfaces_minball, _ = minball_forward_chunked(ppos[qfaces[:, 0]], ppos[qfaces[:, 1]], ppos[qfaces[:, 2]])
             qfaces_minball_center = qfaces_minball.center
             qfaces_minball_radius = qfaces_minball.radius
 
@@ -1781,7 +1813,7 @@ class MVRecon():
                         if step % 50 == 0:
                             self.writer.add_image(f"{label}_image/{k}", v, step, dataformats='HWC')
                 
-                bar.set_description("loss: {:.4f}".format(loss))
+                bar.set_description("loss: {:.4f}".format(loss), refresh=False)
                 if step % 100 == 0 or step == num_steps - 1:
                     self.logger.info(f"[{label}] step {step}/{num_steps} loss={loss.item():.4f}")
 
@@ -1832,7 +1864,7 @@ class MVRecon():
             t_faces = t_faces[t_faces_real]
 
             ### select faces that satisfy min-ball condition
-            t_faces_minball, _ = MB3_V0.forward(ppos[t_faces[:, 0]], ppos[t_faces[:, 1]], ppos[t_faces[:, 2]])
+            t_faces_minball, _ = minball_forward_chunked(ppos[t_faces[:, 0]], ppos[t_faces[:, 1]], ppos[t_faces[:, 2]])
             t_faces_minball_center = t_faces_minball.center
             t_faces_minball_radius = t_faces_minball.radius
 
@@ -1872,7 +1904,7 @@ class MVRecon():
             faces_to_preserve = faces.clone()
             faces_to_remove = tensor_subtract_1(real_dt_faces, faces_to_preserve)
 
-            faces_to_remove_minball, _ = MB3_V0.forward(ppos[faces_to_remove[:, 0]], ppos[faces_to_remove[:, 1]], ppos[faces_to_remove[:, 2]])
+            faces_to_remove_minball, _ = minball_forward_chunked(ppos[faces_to_remove[:, 0]], ppos[faces_to_remove[:, 1]], ppos[faces_to_remove[:, 2]])
             faces_to_remove_minball_center = faces_to_remove_minball.center
             
             n_points = faces_to_remove_minball_center
@@ -2022,6 +2054,7 @@ if __name__ == "__main__":
     parser.add_argument("--input-path", type=str, default="input/3d/mvrecon/toad")
     parser.add_argument("--no-log-time", action='store_true')
     parser.add_argument("--pointcloud-path", type=str, default=None)
+    parser.add_argument("--minball-chunk-size", type=int, default=None)
     args = parser.parse_args()
 
     # load settings from yaml file;
@@ -2030,6 +2063,13 @@ if __name__ == "__main__":
 
     DEVICE = settings['device']
     settings['args']['seed'] = args.seed
+
+    # max number of query faces processed at once in MB3_V0.forward (bounds peak GPU memory);
+    # CLI flag takes precedence over the yaml config, which takes precedence over the built-in default.
+    if args.minball_chunk_size is not None:
+        MINBALL_CHUNK_SIZE = args.minball_chunk_size
+    elif 'minball_chunk_size' in settings['args']:
+        MINBALL_CHUNK_SIZE = int(settings['args']['minball_chunk_size'])
 
     '''
     Set up logdir and logger
