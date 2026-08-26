@@ -429,7 +429,7 @@ if __name__ == "__main__":
     # save gt images;
     for i in range(len(gt_diffuse_map)):
         save_image(gt_diffuse_map[i], os.path.join(output_path, "diffuse_{}.png".format(i)))
-        # save_image(gt_depth_map[i], os.path.join(output_path, "depth_{}.png".format(i)))
+        save_image(gt_depth_map[i], os.path.join(output_path, "depth_{}.png".format(i)))
 
     print("Images saved.")
 
