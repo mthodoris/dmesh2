@@ -35,8 +35,8 @@ args:
       color_lr: 1e-2
       lr_schedule: constant # linear, constant, exp
 
-      image_size: 1024
-      patch_size: 1024
+      image_size: 512
+      patch_size: 512
       num_views: 1
 
       num_steps: 2000
@@ -52,8 +52,8 @@ args:
       real_lr: 1e-2
       lr_schedule: constant # linear, constant, exp
 
-      image_size: 1024
-      patch_size: 1024
+      image_size: 512
+      patch_size: 512
       num_views: 1
 
       num_steps: 2000
