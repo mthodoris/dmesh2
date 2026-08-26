@@ -1,4 +1,4 @@
-log_dir: exp/result/d3/mvrecon
+log_dir: /results/exp/result/d3/mvrecon
 device: 'cuda:0'
 
 args:
