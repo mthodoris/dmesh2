@@ -1027,6 +1027,8 @@ class MVRecon():
                             self.writer.add_image(f"{label}_image/{k}", v, step, dataformats='HWC')
                 
                 bar.set_description("loss: {:.4f}".format(loss))
+                if step % 100 == 0 or step == num_steps - 1:
+                    self.logger.info(f"[{label}] step {step}/{num_steps} loss={loss.item():.4f}")
 
             '''
             Saving
@@ -1499,6 +1501,8 @@ class MVRecon():
                             self.writer.add_image(f"{label}_image/{k}", v, step, dataformats='HWC')
                 
                 bar.set_description("loss: {:.4f}".format(loss))
+                if step % 100 == 0 or step == num_steps - 1:
+                    self.logger.info(f"[{label}] step {step}/{num_steps} loss={loss.item():.4f}")
 
             '''
             Saving
@@ -1778,6 +1782,8 @@ class MVRecon():
                             self.writer.add_image(f"{label}_image/{k}", v, step, dataformats='HWC')
                 
                 bar.set_description("loss: {:.4f}".format(loss))
+                if step % 100 == 0 or step == num_steps - 1:
+                    self.logger.info(f"[{label}] step {step}/{num_steps} loss={loss.item():.4f}")
 
             '''
             Saving
