@@ -12,6 +12,7 @@ from exp.utils.utils import *
 from exp.utils.dmesh import *
 from exp.utils.logging import get_logger
 from exp.utils.common import *
+from exp.utils.mlflow_utils import init_mlflow_run, MetricWriter
 
 from input.common import DOMAIN
 
@@ -73,7 +74,9 @@ class PCRecon3D:
                 init_preal_settings,
 
                 # optimize ppos;
-                optimize_ppos_settings,):
+                optimize_ppos_settings,
+
+                use_mlflow: bool = False,):
 
         self.logger = logger
 
@@ -93,7 +96,7 @@ class PCRecon3D:
         Logdir
         '''
         self.logdir = logdir
-        self.writer = SummaryWriter(logdir)
+        self.writer = MetricWriter(SummaryWriter(logdir), use_mlflow)
 
         '''
         LR
@@ -983,6 +986,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-log-time", action='store_true')
     parser.add_argument("--render", action='store_true')
     parser.add_argument("--auto-rescale", action='store_true', help="center and rescale the input point cloud to fit within [-DOMAIN, DOMAIN]")
+    parser.add_argument("--use-mlflow", action='store_true')
+    parser.add_argument("--mlflow-experiment", type=str, default="pcrecon_3d")
     args = parser.parse_args()
 
     # load settings from yaml file;
@@ -1011,6 +1016,13 @@ if __name__ == "__main__":
     with open(os.path.join(logdir, "config.yaml"), "w") as f:
         yaml.dump(settings, f)
     th.random.manual_seed(args.seed)
+
+    if args.use_mlflow:
+        init_mlflow_run(
+            experiment_name=args.mlflow_experiment,
+            run_name=os.path.basename(logdir.rstrip("/")),
+            settings=settings,
+        )
 
     '''
     Arguments
@@ -1056,6 +1068,8 @@ if __name__ == "__main__":
 
         init_preal_settings,
         optimize_ppos_settings,
+
+        args.use_mlflow,
     )
 
     try:
@@ -1063,3 +1077,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.exception(str(e))
         sys.exit(1)
+    finally:
+        if args.use_mlflow:
+            import mlflow
+            mlflow.end_run()

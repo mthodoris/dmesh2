@@ -23,6 +23,7 @@ from exp.utils.utils import *
 from exp.utils.dmesh import *
 from exp.utils.logging import get_logger
 from exp.utils.common import *
+from exp.utils.mlflow_utils import init_mlflow_run, MetricWriter
 
 from input.common import DOMAIN, LIGHT_DIR
 
@@ -107,7 +108,9 @@ class MVRecon():
                 default_epoch_args: dict,
 
                 # epoch-specific args;
-                epoch_args: dict,):
+                epoch_args: dict,
+
+                use_mlflow: bool = False,):
         '''
         Rendering settings.
         '''
@@ -150,7 +153,7 @@ class MVRecon():
         '''
         self.logdir = logdir
         self.logger = logger
-        self.writer = SummaryWriter(logdir)
+        self.writer = MetricWriter(SummaryWriter(logdir), use_mlflow)
 
         '''
         Epoch args
@@ -2055,6 +2058,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-log-time", action='store_true')
     parser.add_argument("--pointcloud-path", type=str, default=None)
     parser.add_argument("--minball-chunk-size", type=int, default=None)
+    parser.add_argument("--use-mlflow", action='store_true')
+    parser.add_argument("--mlflow-experiment", type=str, default="mvrecon_3d")
     args = parser.parse_args()
 
     # load settings from yaml file;
@@ -2087,6 +2092,13 @@ if __name__ == "__main__":
     with open(os.path.join(logdir, "config.yaml"), "w") as f:
         yaml.dump(settings, f)
     th.random.manual_seed(args.seed)
+
+    if args.use_mlflow:
+        init_mlflow_run(
+            experiment_name=args.mlflow_experiment,
+            run_name=os.path.basename(logdir.rstrip("/")),
+            settings=settings,
+        )
 
     '''
     Input multi-view images and cameras
@@ -2152,6 +2164,8 @@ if __name__ == "__main__":
 
         default_epoch_args,
         epoch_args,
+
+        args.use_mlflow,
     )
 
     try:
@@ -2159,3 +2173,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.exception(str(e))
         sys.exit(1)
+    finally:
+        if args.use_mlflow:
+            import mlflow
+            mlflow.end_run()

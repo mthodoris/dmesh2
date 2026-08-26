@@ -16,6 +16,9 @@ Makefile
 
 exp/result
 
+mlruns/
+mlflow.db
+
 build/
 *.so
 
