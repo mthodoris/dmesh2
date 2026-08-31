@@ -12,6 +12,11 @@ args:
     # App. 9.3.1: "Initial Grid Edge Length: 3x input point cloud density".
     grid_size_density_scale: 3.0
 
+    # Hard cap on grid resolution (grid is at most max_grid_res^3). On a dense
+    # cloud "3x density" alone can ask for tens of millions of grid vertices and
+    # OOM. The paper's grids are ~128^3; raise this for more detail + more memory.
+    max_grid_res: 192
+
     # Voxel-grid down-sampling cell size = downsample_density_scale * density.
     # App. 8.2.1: "down sample the point cloud using a voxel grid, of which size
     # is defined as the point cloud density".
