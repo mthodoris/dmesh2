@@ -1,0 +1,57 @@
+log_dir: exp/result/d3/pcrecon_new
+device: 'cuda:0'
+
+args:
+
+  # ---------------------------------------------------------------------------
+  # Initialization (DMesh++ paper, App. 8.2.1 "Point Cloud Init" + App. 9.3.1)
+  # ---------------------------------------------------------------------------
+  init_args:
+    # BCC tet-grid edge length = grid_size_density_scale * (input point-cloud density),
+    # where density is the mean nearest-neighbour distance of the input cloud.
+    # App. 9.3.1: "Initial Grid Edge Length: 3x input point cloud density".
+    grid_size_density_scale: 3.0
+
+    # Voxel-grid down-sampling cell size = downsample_density_scale * density.
+    # App. 8.2.1: "down sample the point cloud using a voxel grid, of which size
+    # is defined as the point cloud density".
+    downsample_density_scale: 1.0
+
+    # A candidate grid face is kept as "possibly real" during real-value
+    # initialization if the signed distance from its minimum bounding ball to
+    # the nearest input point is below near_thresh_scale * density.
+    near_thresh_scale: 1.5
+
+  # Sec. 4 / App. 8.2: number of coarse-to-fine epochs. App. 9.3.1 uses 1 for
+  # 3D point clouds (=> no subdivision).
+  num_epochs: 1
+
+  lr:
+    pos: 1.0e-3        # App. 9.3.1: "Learning rate (position): 0.001"
+    real: 3.0e-1       # real-value learning rate (matches pcrecon.yaml)
+
+  # --- Step 1: real-value initialization (fixed point positions) --------------
+  init_preal:
+    lr_schedule: constant   # linear | constant | exp
+    num_steps: 200
+    vis_steps: 200
+    real_reg_weight: 1.0e-4  # lambda_real, Eq. (11)/(15)
+
+  # --- Step 2: point-position optimization (Minimum-Ball, Algorithm 2) --------
+  optimize_ppos:
+    num_steps: 2000           # App. 9.3.1: "Step 2 (Point position optimization): 2000"
+    vis_steps: 500
+
+    qface_refresh_steps: 100   # n_1 in App. 7.4 / Algorithm 2 line 8
+    nn_cache_steps: 20         # steps between nearest-neighbour cache refreshes
+    nn_cache_size: 8           # K in App. 7.4 (K-nearest neighbours cached per query face)
+
+    quality_reg_weight: 1.0e-4 # lambda_qual, Eq. (11)/(14)
+    real_reg_weight: 1.0e-4    # lambda_real, Eq. (11)/(15)
+
+  # --- Step 3: real-value re-optimization (fixed point positions) ------------
+  # App. 9.3.1: "Step 3 (Real value optimization): 0"  => skipped by default.
+  optimize_freal:
+    num_steps: 0
+    vis_steps: 200
+    real_reg_weight: 1.0e-4
