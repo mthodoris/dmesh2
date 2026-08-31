@@ -747,6 +747,8 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="exp/config/d3/pcrecon_new.yaml")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--input-path", type=str, default="input/3d/pcrecon/example.npy")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="where to save results/logs (overrides 'log_dir' in the config)")
     parser.add_argument("--no-log-time", action="store_true")
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--auto-rescale", action="store_true")
@@ -765,7 +767,7 @@ if __name__ == "__main__":
     if args.minball_chunk_size is not None:
         MINBALL_CHUNK_SIZE = args.minball_chunk_size
 
-    logdir = settings["log_dir"]
+    logdir = args.output_dir if args.output_dir is not None else settings["log_dir"]
     if not args.no_log_time:
         logdir = logdir + time.strftime("/%Y_%m_%d_%H_%M_%S")
     logdir = setup_logdir(logdir)
