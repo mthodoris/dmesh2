@@ -29,7 +29,7 @@ args:
 
   # Sec. 4 / App. 8.2: number of coarse-to-fine epochs. App. 9.3.1 uses 1 for
   # 3D point clouds (=> no subdivision).
-  num_epochs: 1
+  num_epochs: 4
 
   lr:
     pos: 1.0e-3        # App. 9.3.1: "Learning rate (position): 0.001"

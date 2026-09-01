@@ -74,6 +74,8 @@ from mindiffdt.utils import tensor_subtract_1
 DEVICE = 'cuda:0'
 
 MAX_KNN_K = 40                    # k for the GT->ours term of the expected Chamfer Distance
+MAX_SAMPLES_PER_FACE = 32         # cap on mesh sample points per triangle (bounds peak memory)
+SUBDIV_MAX_FACES = int(1e6)       # only the largest faces are subdivided once the mesh reaches this size
 MINBALL_CHUNK_SIZE = int(5e5)    # max query faces per MB3_V0.forward call (bounds peak memory)
 MESH_FORMAT = 'obj'
 RENDERING = False                # dump intermediate meshes during optimization
@@ -184,7 +186,14 @@ class PCReconNew:
 
         self.ppos = self.tgrid.verts.clone()
         self.preal = th.zeros((self.ppos.shape[0],), dtype=th.float32, device=DEVICE)
-        self.logger.info(f"Init grid: edge length {grid_size:.5f} ({self.ppos.shape[0]} points).")
+
+        # Tie the mesh-sampling spacing to the ACTUAL grid edge (post-clamp), not to
+        # the raw cloud density: if the grid was coarsened, sampling at the fine
+        # density would put ~(edge/interval)^2 samples on every grid face and OOM.
+        self.our_sample_interval = 0.5 * grid_size
+
+        self.logger.info(f"Init grid: edge length {grid_size:.5f} ({self.ppos.shape[0]} points); "
+                         f"mesh sample interval {self.our_sample_interval:.5f}.")
 
     # ------------------------------------------------------------------ #
     # Sampling / losses                                                  #
@@ -193,7 +202,8 @@ class PCReconNew:
         '''
         Area-weighted random barycentric sampling. Each face gets a sample count
         proportional to its area (relative to an equilateral triangle of edge
-        [our_sample_interval]), with a minimum of one sample per face.
+        [our_sample_interval]), clamped to [1, MAX_SAMPLES_PER_FACE] so a few
+        stretched triangles cannot blow up the sample buffer.
         '''
         v0 = ppos[faces[:, 0]]
         v1 = ppos[faces[:, 1]]
@@ -204,7 +214,7 @@ class PCReconNew:
         with th.no_grad():
             area = 0.5 * th.norm(th.cross(e1, e2, dim=-1), dim=-1)
             ref_area = (np.sqrt(3.0) / 4.0) * (self.our_sample_interval ** 2)
-            num_samples = th.clamp((area / ref_area).round().long(), min=1)
+            num_samples = th.clamp((area / ref_area).round().long(), min=1, max=MAX_SAMPLES_PER_FACE)
             face_id = th.repeat_interleave(th.arange(faces.shape[0], device=DEVICE), num_samples)
 
             r1 = th.rand((face_id.shape[0],), device=DEVICE)
@@ -688,7 +698,15 @@ class PCReconNew:
             new_pos.append(ball.center)
             new_real.append(th.zeros((ball.center.shape[0],), device=DEVICE))
 
-        # 2. insert psi = 1 midpoints on every edge of the current mesh
+        # 2. insert psi = 1 midpoints on the edges of the current mesh. Once the
+        #    mesh is large, only subdivide the largest faces (App. 8.2.4 budget)
+        #    so the point count does not explode across epochs.
+        budget = int(self.init_args.get("subdiv_max_faces", SUBDIV_MAX_FACES))
+        if faces.shape[0] > budget:
+            area = triangle_area(ppos, faces)
+            faces = faces[th.argsort(area, descending=True)[:budget]]
+            self.logger.info(f"[subdiv] subdividing the {budget} largest of "
+                             f"{self.dtfaces.shape[0]} faces.")
         edges = th.unique(th.sort(faces[:, [0, 1, 1, 2, 0, 2]].reshape(-1, 2), dim=-1)[0], dim=0)
         new_pos.append(0.5 * (ppos[edges[:, 0]] + ppos[edges[:, 1]]))
         new_real.append(th.ones((edges.shape[0],), device=DEVICE))
@@ -765,7 +783,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="exp/config/d3/pcrecon_new.yaml")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--input-path", type=str, default="input/3d/pcrecon/example.npy")
+    parser.add_argument("--input-path", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default=None,
                         help="where to save results/logs (overrides 'log_dir' in the config)")
     parser.add_argument("--no-log-time", action="store_true")
@@ -810,6 +828,8 @@ if __name__ == "__main__":
     gt_pc = voxel_downsample(gt_pc, a.init_args["downsample_density_scale"] * density)
     logger.info(f"Input cloud: density {density:.5f}, {gt_pc.shape[0]} points after down-sampling.")
 
+    # provisional; PCReconNew.init_grid() recomputes this from the actual
+    # (possibly resolution-capped) grid edge length.
     our_sample_interval = 0.5 * a.init_args["grid_size_density_scale"] * density
 
     optimizer = PCReconNew(
