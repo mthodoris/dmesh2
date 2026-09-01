@@ -165,6 +165,21 @@ class PCReconNew:
         Every face of this grid satisfies the Minimum-Ball condition (Fig. 16).
         '''
         grid_size = self.init_args.grid_size_density_scale * self.density
+
+        # Cap the grid resolution: "3x density" on a dense cloud can ask for tens of
+        # millions of grid vertices, which blows up the per-grid-face tensors in
+        # step 1 and the query-face enumeration / CGAL DT in step 2. The paper's
+        # grids are ~128^3 (App. 9.4.1). max_grid_res bounds it (default 192).
+        max_grid_res = int(self.init_args.get("max_grid_res", 192))
+        min_grid_size = (2.0 * DOMAIN) / max_grid_res
+        if grid_size < min_grid_size:
+            self.logger.warning(
+                f"Requested grid edge {grid_size:.5f} exceeds the {max_grid_res}^3 "
+                f"resolution cap; clamping to {min_grid_size:.5f}. Raise "
+                f"init_args.max_grid_res (more memory) or grid_size_density_scale "
+                f"if you need finer detail.")
+            grid_size = min_grid_size
+
         self.tgrid.init((-DOMAIN, -DOMAIN, -DOMAIN), (DOMAIN, DOMAIN, DOMAIN), grid_size)
 
         self.ppos = self.tgrid.verts.clone()
@@ -355,7 +370,11 @@ class PCReconNew:
 
             possible_face_verts = face_idx[possible].unique()
             # a face is a candidate only if all three of its vertices are candidates
-            possible_face_idx = face_idx[th.all(th.isin(face_idx, possible_face_verts), dim=-1)]
+            # (boolean-mask lookup, not th.isin: the latter can broadcast to a
+            #  [num_faces*3, num_candidate_verts] tensor and OOM on a fine grid)
+            is_candidate_vert = th.zeros_like(ppos[:, 0], dtype=th.bool)
+            is_candidate_vert[possible_face_verts] = True
+            possible_face_idx = face_idx[is_candidate_vert[face_idx].all(dim=-1)]
 
             fixed_zero = th.ones_like(ppos[:, 0], dtype=th.bool)
             fixed_zero[possible_face_verts] = False
